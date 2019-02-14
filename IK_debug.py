@@ -2,6 +2,9 @@ from sympy import *
 from time import time
 from mpmath import radians
 import tf
+import pickle
+from Forward_Kinematics import Forward_Kinematics
+
 
 '''
 Format of test case is [ [[EE position],[EE orientation as quaternions]],[WC location],[joint angles]]
@@ -24,7 +27,6 @@ test_cases = {1:[[[2.16135,-1.42635,1.55109],
                   [-2.99,-0.12,0.94,4.06,1.29,-4.12]],
               4:[],
               5:[]}
-
 
 def test_code(test_case):
     ## Set up code
@@ -58,36 +60,111 @@ def test_code(test_case):
 
     req = Pose(comb)
     start_time = time()
-    
-    ########################################################################################
-    ## 
 
+    ########################################################################################
     ## Insert IK code here!
-    
-    theta1 = 0
-    theta2 = 0
-    theta3 = 0
-    theta4 = 0
-    theta5 = 0
-    theta6 = 0
+    ### Read FK class from pickle file
+    pickle_in = open("FK.pickle", "rb")
+    FK = pickle.load(pickle_in)
 
-    ## 
+    FK_time = time() - start_time
     ########################################################################################
-    
-    ########################################################################################
+
+    # Extract end-effector position and orientation from request
+            # px,py,pz = end-effector position
+            # roll, pitch, yaw = end-effector orientation
+    IK_time = time()
+
+    px = req.poses[x].position.x
+    py = req.poses[x].position.y
+    pz = req.poses[x].position.z
+
+    (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(
+            [req.poses[x].orientation.x, req.poses[x].orientation.y,
+                req.poses[x].orientation.z, req.poses[x].orientation.w])
+################################################################################
+    # Find EE rotation matrix
+    # Define RPY rotation matrices
+    # http://planning.cs.uiuc.edu/node102.html
+
+    r, p, y = symbols('r p y')
+
+    # ROLL
+    ROT_x = Matrix([    [1,      0,       0],
+                        [0, cos(r), -sin(r)],
+                        [0, sin(r),  cos(r)]    ])
+
+    # PITCH
+    ROT_y = Matrix([    [ cos(p), 0, sin(p)],
+                        [      0, 1,      0],
+                        [-sin(p), 0, cos(p)]    ])
+
+
+    # YAW
+    ROT_z = Matrix([    [cos(y), -sin(y), 0],
+                        [sin(y),  cos(y), 0],
+                        [     0,       0, 1]    ])
+
+
+    ROT_EE = ROT_z * ROT_y * ROT_x
+
+    # Define error rotation matrix 
+    Rot_Error = ROT_z.subs(y, radians(180)) * ROT_y.subs(p, radians(-90))
+
+    ROT_EE = ROT_EE * Rot_Error
+
+########################################################################
+    ROT_EE = ROT_EE.subs({'r': roll, 'p': pitch, 'y': yaw})
+################################################################################
+    EE = Matrix([[px],
+                 [py],
+                 [pz]])
+
+    WC = EE - (0.303) * ROT_EE[:,2]
+
+    # Calculate joint angles theta 1, theta 2, theta 3
+    theta1 = atan2(WC[1],WC[0])
+
+    ### SSS triangle for theta2 and theta3
+    side_a = 1.501
+    side_b = sqrt(pow((sqrt(WC[0] * WC[0] + WC[1] * WC[1]) - 0.35), 2) + pow((WC[2] - 0.75), 2))
+    side_c = 1.25
+
+    angle_a = acos((side_b * side_b + side_c * side_c - side_a * side_a)/ (2 * side_b * side_c))
+    angle_b = acos((side_a * side_a + side_c * side_c - side_b * side_b)/ (2 * side_a * side_c))
+    angle_c = acos((side_a * side_a + side_b * side_b - side_c * side_c)/ (2 * side_a * side_b))
+
+    theta2 = pi/2 - angle_a - atan2(WC[2] - 0.75, sqrt(WC[0] * WC[0] + WC[1] * WC[1]) - 0.35)
+    theta3 = pi/2 - (angle_b + 0.036) # 0.036 accounts for sag in link4 of -0.054m
+
+    R0_3 = FK.T0_1[0:3,0:3] * FK.T1_2[0:3,0:3] * FK.T2_3[0:3,0:3]
+    R0_3 = R0_3.evalf(subs={FK.q1: theta1, FK.q2: theta2, FK.q3: theta3})
+
+    R3_6 = R0_3.inv("LU") * ROT_EE
+
+    # Euler angles rom rotation matrix R3_6
+    theta4 = atan2(R3_6[2,2], -R3_6[0,2])
+    theta5 = atan2(sqrt(R3_6[0,2]*R3_6[0,2] + R3_6[2,2]*R3_6[2,2]), R3_6[1,2])
+    theta6 = atan2(-R3_6[1,1], R3_6[1,0])
+
+    IK_time = time()- IK_time
+
     ## For additional debugging add your forward kinematics here. Use your previously calculated thetas
     ## as the input and output the position of your end effector as your_ee = [x,y,z]
 
-    ## (OPTIONAL) YOUR CODE HERE!
+    print("FK time",FK_time)
+    print("IK time",IK_time)
+
+    FWK = FK.T0_EE.evalf(subs={FK.q1:theta1, FK.q2:theta2, FK.q3:theta3, FK.q4:theta4, FK.q5:theta5, FK.q6:theta6})
+
 
     ## End your code input for forward kinematics here!
     ########################################################################################
 
     ## For error analysis please set the following variables of your WC location and EE location in the format of [x,y,z]
-    your_wc = [1,1,1] # <--- Load your calculated WC values in this array
-    your_ee = [1,1,1] # <--- Load your calculated end effector value from your forward kinematics
+    your_wc = [WC[0], WC[1], WC[2]] # <--- Load your calculated WC values in this array
+    your_ee = [FWK[0,3],FWK[1,3],FWK[2,3]] # <--- Load your calculated end effector value from your forward kinematics
     ########################################################################################
-
     ## Error analysis
     print ("\nTotal run time to calculate joint angles from pose is %04.4f seconds" % (time()-start_time))
 
@@ -133,9 +210,8 @@ def test_code(test_case):
 
 
 
-
 if __name__ == "__main__":
     # Change test case number for different scenarios
-    test_case_number = 1
+    test_case_number = 3
 
     test_code(test_cases[test_case_number])

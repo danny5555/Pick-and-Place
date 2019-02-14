@@ -1,0 +1,7 @@
+/kuka_arm/scripts/copied/*
+/used/
+*.swp
+*.pyc
+/kuka_arm/scripts/FWD_Kinematics_scripts
+/kuka_arm/scripts/IK_kinematics_scripts
+pickled.py
